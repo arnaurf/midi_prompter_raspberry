@@ -10,7 +10,6 @@ HAS_PYDBUS = False
 if IS_LINUX:
     try:
         from pydbus import SessionBus
-        print("imported")
         HAS_PYDBUS = True
     except (ImportError, Exception):
         # Failed to load DBus on Linux
@@ -36,7 +35,6 @@ class pdfManager:
         """
         self.pdf_folder = pdf_folder
         if HAS_PYDBUS:
-            print(pdf_files)
             self.start_zathura(pdf_files)
         else:
             print("Warning: Zathura will not be controlled.")
@@ -108,7 +106,6 @@ class pdfManager:
         """
         Open a new PDF by index.
         """
-        print(self.pdf_files)
         file_path = os.path.join(self.pdf_folder, self.pdf_files[new_pdf_idx])
         self.current_pdf = new_pdf_idx
 

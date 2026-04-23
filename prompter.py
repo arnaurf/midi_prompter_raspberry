@@ -66,7 +66,7 @@ def setup_midi(pdf_manager, queue, overlay: OverlayMenu):
     if not available_ports:
         print("No MIDI ports detected")
         sys.exit(1)
-    print(port_name)
+
     midi_in = rtmidi.MidiIn()
     midi_out = rtmidi.MidiOut()
     midi_in.open_port(int(port_name) - 1)
@@ -93,7 +93,7 @@ def main():
         for missing in missing_files:
             print(f"  - {missing}")
         sys.exit(1)
-    print(pdf_files)
+
     # Listen keyboard and MIDI device and add tasks to queue
     zathura = pdfManager(pdf_files, pdf_folder)
     action_queue = queue.Queue()

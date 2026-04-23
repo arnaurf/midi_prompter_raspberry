@@ -1,8 +1,22 @@
 import subprocess
 import time
 import os
-from pydbus import SessionBus
+import platform
 
+# Check system OS to avoid crashing on macOS
+IS_LINUX = platform.system() == "Linux"
+
+HAS_PYDBUS = False
+if IS_LINUX:
+    try:
+        from pydbus import SessionBus
+        HAS_PYDBUS = True
+    except (ImportError, Exception):
+        # Failed to load DBus on Linux
+        HAS_PYDBUS = False
+else:
+    # Running on macOS or other OS, DBus disabled
+    print("Environment: macOS/Other. DBus control disabled for compatibility.")
 
 class pdfManager:
     """
@@ -20,7 +34,10 @@ class pdfManager:
         Start Zathura with the given PDF list and folder.
         """
         self.pdf_folder = pdf_folder
-        self.start_zathura(pdf_files)
+        if HAS_PYDBUS:
+            self.start_zathura(pdf_files)
+        else:
+            print("Warning: Zathura will not be controlled.")
 
     def clear_zathura_sessions(self):
         """
@@ -46,6 +63,9 @@ class pdfManager:
         """
         Launch Zathura in presentation mode with the first PDF.
         """
+        if not HAS_PYDBUS:
+            return
+        
         self.clear_zathura_sessions()
         self.pdf_files = pdf_files
 

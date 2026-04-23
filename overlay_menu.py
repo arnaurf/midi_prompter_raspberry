@@ -1,4 +1,7 @@
 import tkinter as tk
+import platform
+
+CURSOR_NAME = "hand2" if platform.system() == "Linux" else "pontinghand"
 
 class OverlayMenu:
     def __init__(self, pdf_files, callback):
@@ -88,7 +91,7 @@ class OverlayMenu:
                               selectbackground="#333333", 
                               selectforeground=self.accent_color,
                               activestyle='none', # Elimina el subrayado feo del item activo
-                              cursor="pointinghand")
+                              cursor=CURSOR_NAME)
         
         listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
@@ -160,7 +163,7 @@ class OverlayMenu:
         
         label = tk.Label(self.active_hint, text="  [ CLICK ] for Menu  ", 
                          fg=self.accent_color, bg=self.bg_color,
-                         font=("Helvetica", 11, "bold"), cursor="pointinghand")
+                         font=("Helvetica", 11, "bold"), cursor=CURSOR_NAME)
         label.pack(expand=True, fill=tk.BOTH)
 
         # USAMOS ButtonPress-1 para que sea instantáneo al bajar el dedo

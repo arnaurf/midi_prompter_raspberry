@@ -29,11 +29,13 @@ class OverlayMenu:
 
     def _global_handle_enter(self, event=None):
         """Internal trigger for the hint window."""
-        print(f"DEBUG: Triggered _global_handle_enter. Callback exists: {self.current_callback is not None}")
-        
         if self.current_callback:
+            # Desactivamos el bind global inmediatamente para liberar la tecla Enter
+            self.root.unbind_all('<Return>')
+            
             cb = self.current_callback
             self.current_callback = None 
+            
             if self.active_hint:
                 try:
                     self.active_hint.destroy()
@@ -41,14 +43,22 @@ class OverlayMenu:
                     pass
                 self.active_hint = None
             
-            print("DEBUG: Executing Callback...")
             cb()
 
     def _prepare_window(self, width, height, borderless=True, position="center"):
         win = tk.Toplevel(self.root)
         win.attributes("-topmost", True)
-        win.configure(bg=self.bg_color)
         
+        if borderless:
+            win.overrideredirect(True)
+            # 'utility' es mejor que 'notification' para recibir teclado
+            try:
+                win.tk.call('wm', 'attributes', win._w, '-type', 'utility')
+            except:
+                pass
+
+        win.configure(bg=self.bg_color)
+
         # 1. Antes de aplicar borderless, calculamos posición
         sw = win.winfo_screenwidth()
         sh = win.winfo_screenheight()
@@ -61,82 +71,75 @@ class OverlayMenu:
             x, y = sw - width - 20, sh - height - 80
         
         win.geometry(f"{width}x{height}+{x}+{y}")
-
-        # 2. El TRUCO para Linux: 
-        # Forzamos a la ventana a existir antes de quitarle los bordes
-        if borderless:
-            win.update_idletasks() # Dibuja lo pendiente
-            win.overrideredirect(True)
-        
-        # 3. Forzar el renderizado del contenido (el texto)
-        win.lift()
-        win.update() # Fuerza el evento Expose de X11
         
         return win
 
     def _create_list_ui(self, parent, title, items, on_select_callback):
-        """
-        Reusable UI for lists with minimalist styling.
-        Optimized for instant 'ButtonPress' selection on macOS/Linux.
-        """
-        # Título minimalista
-        tk.Label(parent, text=title.upper(), fg=self.accent_color, bg=self.bg_color, 
-                 font=("Helvetica", 10, "bold")).pack(pady=(10, 5))
+        # Eliminar bordes del contenedor padre si existen
+        parent.config(padx=0, pady=0, highlightthickness=0)
 
-        # Configuración de la Listbox
+        # Título con menos margen superior
+        tk.Label(parent, text=title.upper(), fg=self.accent_color, bg=self.bg_color, 
+                 font=("Helvetica", 9, "bold")).pack(pady=(8, 2))
+
+        # Listbox sin bordes y con highlight sutil
         listbox = tk.Listbox(parent, 
                               bg=self.list_bg, 
                               fg=self.fg_color, 
                               font=("Helvetica", 11), 
                               borderwidth=0, 
-                              highlightthickness=0, 
-                              selectbackground="#333333", 
-                              selectforeground=self.accent_color,
-                              activestyle='none', # Elimina el subrayado feo del item activo
-                              cursor=CURSOR_NAME)
+                              highlightthickness=0, # 0 para minimalismo total
+                              selectbackground=self.accent_color, 
+                              selectforeground="black",
+                              activestyle='none')
         
-        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        # fill=tk.BOTH y expand=True para que ocupe toda la ventana sin dejar huecos grises
+        listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Insertar elementos
         for item in items:
             listbox.insert(tk.END, f" {item}")
 
-        # Foco inicial
-        listbox.focus_set()
-        listbox.selection_set(0)
-
-        # --- Lógica de Selección ---
+        # --- LÓGICA DE SELECCIÓN ---
         def confirm(e=None):
             selection = listbox.curselection()
             if selection:
-                # Debug opcional para verificar la rapidez
-                # print(f"DEBUG: Instant selection of index {selection[0]}")
                 on_select_callback(selection[0])
+                parent.grab_release() # <--- LIBERAR AQUÍ
                 parent.destroy()
 
         def on_press(event):
-            """
-            Selecciona el elemento bajo el ratón e inmediatamente confirma.
-            Esto ocurre en el momento exacto de bajar el dedo (Down).
-            """
-            # Obtener el índice basado en la posición Y del click
+            # Al hacer click, forzamos la selección del elemento bajo el ratón y confirmamos
             index = listbox.nearest(event.y)
             listbox.selection_clear(0, tk.END)
             listbox.selection_set(index)
+            listbox.activate(index)
             confirm()
 
-        # --- Bindings ---
-        # 1. Teclado (Enter)
+        # --- BINDINGS ROBUSTOS ---
+        # Enter (Principal y Numérico)
         listbox.bind('<Return>', confirm)
+        listbox.bind('<KP_Enter>', confirm)
         
-        # 2. Ratón: Instantáneo al presionar (Down)
+        # Click instantáneo
         listbox.bind('<ButtonPress-1>', on_press)
         
-        # 3. Escape para cancelar y cerrar
+        # Escape para salir
         parent.bind('<Escape>', lambda e: parent.destroy())
 
-        return listbox
+        # --- GESTIÓN DE FOCO AGRESIVA ---
+        listbox.selection_set(0)
+        listbox.activate(0)
+        listbox.focus_force()
 
+        # EL TRUCO MAESTRO PARA LINUX:
+        # Esperamos un instante a que la ventana exista y forzamos el 'grab'
+        def force_input():
+            parent.grab_set() # Esto redirige TODO el teclado a esta ventana
+            listbox.focus_set()
+        
+        parent.after(100, force_input)
+
+        return listbox
     # --- PUBLIC METHODS ---
 
     def prompt_selection(self, title, options):
@@ -161,20 +164,27 @@ class OverlayMenu:
         if self.active_hint:
             self.active_hint.destroy()
 
-        self.active_hint = self._prepare_window(width=220, height=50, borderless=True, position="bottom-right")
+        self.active_hint = self._prepare_window(width=220, height=50, borderless=True, position="top-right")
         
-        label = tk.Label(self.active_hint, text="  [ CLICK ] for Menu  ", 
+        import platform
+        cursor_type = "hand2" if platform.system() == "Linux" else "pointinghand"
+        
+        label = tk.Label(self.active_hint, text="  [ ENTER ] for Menu  ", 
                          fg=self.accent_color, bg=self.bg_color,
-                         font=("Helvetica", 11, "bold"), cursor=CURSOR_NAME)
+                         font=("Helvetica", 11, "bold"), cursor=cursor_type)
         label.pack(expand=True, fill=tk.BOTH)
 
-        # USAMOS ButtonPress-1 para que sea instantáneo al bajar el dedo
+        # BINDINGS PARA LINUX (Teclado)
+        # Enlazamos a la ventana y al root para máxima seguridad
+        self.active_hint.bind('<Return>', lambda e: self._global_handle_enter())
+        self.root.bind('<Return>', lambda e: self._global_handle_enter())
+
+        # BINDING PARA CLIC (Mantener lo que ya funciona)
         label.bind('<ButtonPress-1>', lambda e: self._global_handle_enter())
         
-        self.active_hint.lift()
+        # FORZAR FOCO (Crítico en Raspberry)
         self.active_hint.focus_force()
-        self.active_hint.update_idletasks()
-        self.active_hint.update() # Esto es vital en Raspberry para que el texto aparezca
+        self.active_hint.update()
 
     def show_pdf_selector(self):
         """Shows the minimalist selector at the BOTTOM-RIGHT."""

@@ -119,10 +119,11 @@ def main():
     if IS_LINUX:
         keyboardInputHandler(zathura, action_queue)
     else:
-        print("Skipping keyboardInputHandler on macOS to avoid Tcl errors.")
+        print("WARNING: Skipping keyboardInputHandler on macOS to avoid Tcl errors. Console interaction disabled.")
 
     # 3. Show the initial UI Hint
-    overlay.show_mini_hint(on_enter_press)
+    if ENABLE_GUI:
+        overlay.show_mini_hint(on_enter_press)
 
     try:
         while True:
@@ -132,7 +133,8 @@ def main():
                 action()
             
             # Keep Tkinter alive (Hint, Selectors, etc.)
-            overlay.update()
+            if ENABLE_GUI:
+                overlay.update()
             time.sleep(0.01)
 
     except KeyboardInterrupt:

@@ -93,7 +93,7 @@ def main():
         for missing in missing_files:
             print(f"  - {missing}")
         sys.exit(1)
-
+    print(pdf_files)
     # Listen keyboard and MIDI device and add tasks to queue
     zathura = pdfManager(pdf_files, pdf_folder)
     action_queue = queue.Queue()
@@ -114,7 +114,6 @@ def main():
 
     # 1. MIDI Setup
     midi_in, midi_out = setup_midi(zathura, action_queue, overlay)
-
     # 2. Keyboard Input (ONLY ON LINUX / RASPBERRY)
     if IS_LINUX:
         keyboardInputHandler(zathura, action_queue)

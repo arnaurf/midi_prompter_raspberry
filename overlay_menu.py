@@ -49,26 +49,28 @@ class OverlayMenu:
         win.attributes("-topmost", True)
         win.configure(bg=self.bg_color)
         
-        win.update_idletasks()
-        if borderless:
-            win.overrideredirect(True)
-
+        # 1. Antes de aplicar borderless, calculamos posición
         sw = win.winfo_screenwidth()
         sh = win.winfo_screenheight()
 
         if position == "center":
             x, y = (sw - width) // 2, (sh - height) // 2
         elif position == "top-right":
-            # Margen de 20px desde la derecha y 40px desde arriba (bajo la barra de Mac)
-            x = sw - width - 20
-            y = 40
+            x, y = sw - width - 20, 40
         elif position == "bottom-right":
-            # Margen de 20px desde la derecha y 80px desde abajo (sobre el Dock)
-            x = sw - width - 20
-            y = sh - height - 80
+            x, y = sw - width - 20, sh - height - 80
         
         win.geometry(f"{width}x{height}+{x}+{y}")
-        win.update_idletasks()
+
+        # 2. El TRUCO para Linux: 
+        # Forzamos a la ventana a existir antes de quitarle los bordes
+        if borderless:
+            win.update_idletasks() # Dibuja lo pendiente
+            win.overrideredirect(True)
+        
+        # 3. Forzar el renderizado del contenido (el texto)
+        win.lift()
+        win.update() # Fuerza el evento Expose de X11
         
         return win
 
@@ -171,6 +173,8 @@ class OverlayMenu:
         
         self.active_hint.lift()
         self.active_hint.focus_force()
+        self.active_hint.update_idletasks()
+        self.active_hint.update() # Esto es vital en Raspberry para que el texto aparezca
 
     def show_pdf_selector(self):
         """Shows the minimalist selector at the BOTTOM-RIGHT."""

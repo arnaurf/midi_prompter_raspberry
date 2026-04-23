@@ -30,3 +30,5 @@ venv/
 
 # Ignore pdf files
 *.pdf
+
+venv*

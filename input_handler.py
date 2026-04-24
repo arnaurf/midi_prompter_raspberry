@@ -6,59 +6,39 @@ CHANNEL = 1     # Default MIDI channel
 DEBUG = False
 
 def keyboardInputHandler(pdf_manager, action_queue):
-    """
-    Start a thread to read keyboard commands.
-    """
     def input_thread():
         while True:
-            cmd = input("Enter PDF number or 'exit': ")
+            cmd = input("Enter Relative Path or 'exit': ")
             if cmd == "exit":
                 action_queue.put(lambda: exit())
-            elif cmd.isdigit():
-                n = int(cmd)
-                action_queue.put(lambda pm=pdf_manager, num=n: pm.open_pdf(num))
-
+            else:
+                action_queue.put(lambda pm=pdf_manager, p=cmd: pm.open_pdf(p))
     threading.Thread(target=input_thread, daemon=True).start()
 
-
 class MidiInputHandler:
-    """
-    Handle MIDI messages and map them to PDF actions.
-    """
-
-    def __init__(self, port, midi_through, pdf_manager, queue):
-        """
-        Initialize MIDI handler with port, thru device, and PDF manager.
-        """
+    def __init__(self, port, midi_through, pdf_manager, queue, setlist_map):
         self.port = port
         self._wallclock = time.time()
         self.midi_through = midi_through
         self.pdf_manager = pdf_manager
-        self.channel = CHANNEL - 1 # Start idx=0
+        self.channel = CHANNEL - 1 
         self.action_queue = queue
+        self.setlist_map = setlist_map # { "1": "Folder/Song.pdf" }
 
     def __call__(self, event, data=None):
-        """
-        Process incoming MIDI events.
-        """
         message, deltatime = event
         self._wallclock += deltatime
         self.midi_through.send_message(message)
-        if DEBUG:
-            print("[%s] @%0.3f %r" % (self.port, self._wallclock, message))
 
         message_type = message[0] & 0xF0
         message_channel = message[0] & 0x0F  
 
-        # Program Change: open PDF
         if message_type == 0xC0 and message_channel == self.channel:
             program_number = message[1]
-            print(f"Program Change received: Program {program_number}")
-            self.action_queue.put(lambda: self.pdf_manager.open_pdf(program_number))
+            rel_path = self.setlist_map.get(str(program_number))
+            if rel_path:
+                self.action_queue.put(lambda: self.pdf_manager.open_pdf(rel_path))
 
-        # Note On: next page
         elif message_type == 0x90 and message_channel == self.channel:
-            note_number = message[1]
-            if note_number == NEXT_PAGE:
-                print("INFO: C3 Note (48) received.")
+            if message[1] == NEXT_PAGE:
                 self.action_queue.put(lambda: self.pdf_manager.turn_page())

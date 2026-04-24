@@ -1,211 +1,211 @@
 import tkinter as tk
 import platform
-
-CURSOR_NAME = "hand2" if platform.system() == "Linux" else "pontinghand"
+import queue
+import os
+from pynput import keyboard
 
 class OverlayMenu:
-    def __init__(self, pdf_files, callback):
-        self.pdf_files = pdf_files
+    def __init__(self, pdf_root, callback):
+        self.pdf_root = pdf_root
         self.callback = callback
+        self.current_subpath = ""
         
-        # Initialize Tcl engine
         self.root = tk.Tk()
-        self.root.withdraw()
+        self.root.geometry("1x1-1000-1000")
+        self.root.title("OverlayMaster")
         
-        # Theme
         self.bg_color = '#121212'
         self.list_bg = '#1e1e1e'
         self.fg_color = '#ffffff'
         self.accent_color = 'cyan'
+        self.folder_color = '#f1c40f'
         
-        # State management
         self.current_callback = None
         self.active_hint = None
+        self.active_window = None
+        self.current_listbox = None
+        self.is_midi_setup = False
         
-        # Global binding: Catch Enter anywhere in the app
-        self.root.bind_all('<Return>', self._global_handle_enter)
+        self.key_queue = queue.Queue()
+        self.cursor_type = "hand2" if platform.system() == "Linux" else "pointinghand"
 
-    # --- PRIVATE HELPERS ---
+        self._check_queue()
+        self.listener = keyboard.Listener(on_press=self._on_pynput_press)
+        self.listener.daemon = True
+        self.listener.start()
 
-    def _global_handle_enter(self, event=None):
-        """Internal trigger for the hint window."""
-        if self.current_callback:
-            # Desactivamos el bind global inmediatamente para liberar la tecla Enter
-            self.root.unbind_all('<Return>')
-            
-            cb = self.current_callback
-            self.current_callback = None 
-            
-            if self.active_hint:
-                try:
-                    self.active_hint.destroy()
-                except:
-                    pass
-                self.active_hint = None
-            
-            cb()
+    def _on_pynput_press(self, key):
+        try:
+            is_enter = key == keyboard.Key.enter or getattr(key, 'vk', None) in [13, 36, 104]
+            if is_enter:
+                self.key_queue.put("Return")
+            elif hasattr(key, 'char'):
+                if key.char == 'w': self.key_queue.put("Up")
+                elif key.char == 's': self.key_queue.put("Down")
+            elif key == keyboard.Key.esc:
+                self.key_queue.put("Escape")
+        except Exception: pass
+
+    def _check_queue(self):
+        try:
+            while True:
+                key_name = self.key_queue.get_nowait()
+                self._handle_logic(key_name)
+        except queue.Empty: pass
+        self.root.after(20, self._check_queue)
+
+    def _handle_logic(self, key_name):
+        if self.active_hint and self.active_hint.winfo_exists() and not self.active_window:
+            if key_name == "Return":
+                self._global_handle_enter()
+                return
+
+        if self.active_window and self.active_window.winfo_exists():
+            if key_name == "Escape":
+                self._close_current_window()
+            elif self.current_listbox:
+                if key_name == "Up": self._move_selection(-1)
+                elif key_name == "Down": self._move_selection(1)
+                elif key_name == "Return": self._confirm_selection_logic()
+
+    def _move_selection(self, delta):
+        lb = self.current_listbox
+        idx = lb.curselection()
+        curr = idx[0] if idx else 0
+        new = max(0, min(lb.size() - 1, curr + delta))
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(new)
+        lb.activate(new)
+        lb.see(new)
+
+    def _confirm_selection_logic(self):
+        if not self.current_listbox: return
+        idx_list = self.current_listbox.curselection()
+        if not idx_list: return
+        
+        idx = idx_list[0]
+        item_text = self.current_listbox.get(idx).strip()
+
+        if self.is_midi_setup:
+            self.midi_res.set(idx)
+            self._close_current_window()
+            return
+
+        if item_text == "../":
+            self.current_subpath = os.path.dirname(self.current_subpath)
+            self.show_pdf_selector()
+        elif item_text.endswith("/"):
+            self.current_subpath = os.path.join(self.current_subpath, item_text[:-1])
+            self.show_pdf_selector()
+        else:
+            full_rel_path = os.path.join(self.current_subpath, item_text)
+            self._close_current_window()
+            self.callback(full_rel_path)
 
     def _prepare_window(self, width, height, borderless=True, position="center"):
         win = tk.Toplevel(self.root)
         win.attributes("-topmost", True)
-        
-        if borderless:
-            win.overrideredirect(True)
-            # 'utility' es mejor que 'notification' para recibir teclado
-            try:
-                win.tk.call('wm', 'attributes', win._w, '-type', 'utility')
-            except:
-                pass
-
         win.configure(bg=self.bg_color)
-
-        # 1. Antes de aplicar borderless, calculamos posición
-        sw = win.winfo_screenwidth()
-        sh = win.winfo_screenheight()
-
-        if position == "center":
-            x, y = (sw - width) // 2, (sh - height) // 2
-        elif position == "top-right":
-            x, y = sw - width - 20, 40
-        elif position == "bottom-right":
-            x, y = sw - width - 20, sh - height - 80
-        
+        if borderless: win.overrideredirect(True)
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        if position == "bottom-right": x, y = sw - width - 20, sh - height - 80
+        elif position == "top-right": x, y = sw - width - 20, 40
+        else: x, y = (sw - width) // 2, (sh - height) // 2
         win.geometry(f"{width}x{height}+{x}+{y}")
-        
+        win.focus_force()
         return win
 
-    def _create_list_ui(self, parent, title, items, on_select_callback):
-        # Eliminar bordes del contenedor padre si existen
-        parent.config(padx=0, pady=0, highlightthickness=0)
-
-        # Título con menos margen superior
-        tk.Label(parent, text=title.upper(), fg=self.accent_color, bg=self.bg_color, 
-                 font=("Helvetica", 9, "bold")).pack(pady=(8, 2))
-
-        # Listbox sin bordes y con highlight sutil
-        listbox = tk.Listbox(parent, 
-                              bg=self.list_bg, 
-                              fg=self.fg_color, 
-                              font=("Helvetica", 11), 
-                              borderwidth=0, 
-                              highlightthickness=0, # 0 para minimalismo total
-                              selectbackground=self.accent_color, 
-                              selectforeground="black",
-                              activestyle='none')
-        
-        # fill=tk.BOTH y expand=True para que ocupe toda la ventana sin dejar huecos grises
-        listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        for item in items:
-            listbox.insert(tk.END, f" {item}")
-
-        # --- LÓGICA DE SELECCIÓN ---
-        def confirm(e=None):
-            selection = listbox.curselection()
-            if selection:
-                on_select_callback(selection[0])
-                parent.grab_release() # <--- LIBERAR AQUÍ
-                parent.destroy()
-
-        def on_press(event):
-            # Al hacer click, forzamos la selección del elemento bajo el ratón y confirmamos
-            index = listbox.nearest(event.y)
-            listbox.selection_clear(0, tk.END)
-            listbox.selection_set(index)
-            listbox.activate(index)
-            confirm()
-
-        # --- BINDINGS ROBUSTOS ---
-        # Enter (Principal y Numérico)
-        listbox.bind('<Return>', confirm)
-        listbox.bind('<KP_Enter>', confirm)
-        
-        # Click instantáneo
-        listbox.bind('<ButtonPress-1>', on_press)
-        
-        # Escape para salir
-        parent.bind('<Escape>', lambda e: parent.destroy())
-
-        # --- GESTIÓN DE FOCO AGRESIVA ---
-        listbox.selection_set(0)
-        listbox.activate(0)
-        listbox.focus_force()
-
-        # EL TRUCO MAESTRO PARA LINUX:
-        # Esperamos un instante a que la ventana exista y forzamos el 'grab'
-        def force_input():
-            parent.grab_set() # Esto redirige TODO el teclado a esta ventana
-            listbox.focus_set()
-        
-        parent.after(100, force_input)
-
-        return listbox
-    # --- PUBLIC METHODS ---
-
     def prompt_selection(self, title, options):
-        """Blocking selection for setup (MIDI). Returns index."""
-        win = self._prepare_window(width=450, height=350, borderless=False)
+        self.is_midi_setup = True
+        self.midi_res = tk.IntVar(value=-1)
+        win = self._prepare_window(width=400, height=300, borderless=False)
         win.title(title)
-        
-        res = tk.IntVar(value=-1)
-        
-        def save_idx(idx):
-            res.set(idx)
+        self._create_list_ui(win, title, [(o, "file") for o in options])
+        win.wait_window(win)
+        self.is_midi_setup = False
+        return self.midi_res.get()
 
-        self._create_list_ui(win, title, options, save_idx)
-        
-        win.lift()
-        win.focus_force()
-        win.wait_variable(res)
-        return res.get()
+    def _create_list_ui(self, parent, title, items):
+        tk.Label(parent, text=title.upper(), fg=self.accent_color, bg=self.bg_color, font=("Helvetica", 9, "bold")).pack(pady=5)
+        lb = tk.Listbox(parent, bg=self.list_bg, fg=self.fg_color, borderwidth=0, highlightthickness=0, selectbackground=self.accent_color, selectforeground="black", activestyle='none', font=("Helvetica", 11))
+        lb.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        for text, kind in items:
+            lb.insert(tk.END, f" {text}")
+            if kind == "folder": lb.itemconfig(tk.END, fg=self.folder_color)
+            elif kind == "back": lb.itemconfig(tk.END, fg=self.accent_color)
+        lb.selection_set(0)
+        self.current_listbox = lb
+        self.active_window = parent
 
     def show_mini_hint(self, on_enter_callback):
         self.current_callback = on_enter_callback
-        if self.active_hint:
-            self.active_hint.destroy()
-
-        self.active_hint = self._prepare_window(width=220, height=50, borderless=True, position="top-right")
-        
-        import platform
-        cursor_type = "hand2" if platform.system() == "Linux" else "pointinghand"
-        
-        label = tk.Label(self.active_hint, text="  [ ENTER ] for Menu  ", 
-                         fg=self.accent_color, bg=self.bg_color,
-                         font=("Helvetica", 11, "bold"), cursor=cursor_type)
-        label.pack(expand=True, fill=tk.BOTH)
-
-        # BINDINGS PARA LINUX (Teclado)
-        # Enlazamos a la ventana y al root para máxima seguridad
-        self.active_hint.bind('<Return>', lambda e: self._global_handle_enter())
-        self.root.bind('<Return>', lambda e: self._global_handle_enter())
-
-        # BINDING PARA CLIC (Mantener lo que ya funciona)
-        label.bind('<ButtonPress-1>', lambda e: self._global_handle_enter())
-        
-        # FORZAR FOCO (Crítico en Raspberry)
-        self.active_hint.focus_force()
-        self.active_hint.update()
+        if self.active_hint: self.active_hint.destroy()
+        self.active_hint = self._prepare_window(200, 45, position="top-right")
+        tk.Label(self.active_hint, text="  [ ENTER ] for Menu  ", fg=self.accent_color, bg=self.bg_color, font=("Helvetica", 10, "bold")).pack(expand=True, fill=tk.BOTH)
 
     def show_pdf_selector(self):
-        """Shows the minimalist selector at the BOTTOM-RIGHT."""
-        num_songs = len(self.pdf_files)
-        # Un poco más alto para que quepan bien las canciones abajo
-        calculated_height = min(450, (num_songs * 28) + 60)
+        """Navegador de archivos con mensaje de ayuda en inglés."""
+        abs_path = os.path.abspath(os.path.join(self.pdf_root, self.current_subpath))
+        items = []
         
-        # Posición: bottom-right
-        win = self._prepare_window(width=280, height=calculated_height, borderless=True, position="bottom-right")
+        if self.current_subpath and self.current_subpath != ".":
+            items.append(("../", "back"))
+            
+        try:
+            for e in sorted(os.listdir(abs_path)):
+                full = os.path.join(abs_path, e)
+                if os.path.isdir(full):
+                    items.append((f"{e}/", "folder"))
+                elif e.lower().endswith(".pdf"):
+                    items.append((e, "file"))
+        except:
+            pass
+
+        if self.active_window: 
+            self.active_window.destroy()
+
+        # Aumentamos un poco el alto (h) para que quepa el mensaje de ayuda
+        h = min(550, (len(items) * 28) + 100) 
+        win = self._prepare_window(300, h, position="bottom-right")
         
-        sorted_ids = sorted(self.pdf_files.keys())
-        names = [f"[{i}] {self.pdf_files[i]}" for i in sorted_ids]
+        # Título de la ventana
+        title = f"/{self.current_subpath}" if self.current_subpath else "BROWSER"
+        self._create_list_ui(win, title, items)
 
-        def on_pdf_chosen(list_idx):
-            real_id = sorted_ids[list_idx]
-            self.callback(real_id)
+        # --- MENSAJE DE AYUDA EN INGLÉS ---
+        help_text = "Use [W/S] to Navigate\n[ENTER] to Select / [ESC] to Exit"
+        help_label = tk.Label(
+            win, 
+            text=help_text, 
+            fg="#777777", # Gris suave para que no distraiga demasiado
+            bg=self.bg_color, 
+            font=("Helvetica", 8, "italic"),
+            justify=tk.CENTER
+        )
+        help_label.pack(side=tk.BOTTOM, pady=(0, 10))
 
-        self._create_list_ui(win, "Setlist", names, on_pdf_chosen)
-        win.lift()
-        win.focus_force()
+    def _global_handle_enter(self):
+        """Maneja el Enter cuando solo está el Mini Hint visible."""
+        if self.current_callback:
+            cb = self.current_callback
+            self.current_callback = None
+            if self.active_hint:
+                self.active_hint.destroy()
+                self.active_hint = None
+            cb()
+
+    def _close_current_window(self):
+        """Cierra la ventana activa y restaura el Hint si es necesario."""
+        if self.active_window:
+            self.active_window.destroy()
+            self.active_window = None
+            self.current_listbox = None
+            
+        # Si no estamos en el setup inicial de MIDI, restauramos el hint
+        # para que el usuario pueda volver a abrir el menú.
+        if not self.is_midi_setup:
+            # Importante: pasamos el callback que abre el selector
+            self.show_mini_hint(self.show_pdf_selector)
 
     def update(self):
-        """Process Tkinter events."""
         self.root.update()

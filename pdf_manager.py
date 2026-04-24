@@ -12,36 +12,22 @@ if IS_LINUX:
         from pydbus import SessionBus
         HAS_PYDBUS = True
     except (ImportError, Exception):
-        # Failed to load DBus on Linux
         HAS_PYDBUS = False
-else:
-    # Running on macOS or other OS, DBus disabled
-    print("Environment: macOS/Other. DBus control disabled for compatibility.")
 
 class pdfManager:
     """
     Manage PDF playback in Zathura via D-Bus.
     """
-
-    dbus = None
-    zathura_ps = None
-    current_pdf = 1
-    current_page = 1
-    pdf_files = {}
-
-    def __init__(self, pdf_files, pdf_folder):
-        """
-        Start Zathura with the given PDF list and folder.
-        """
+    def __init__(self, pdf_folder):
         self.pdf_folder = pdf_folder
-        if HAS_PYDBUS:
-            self.start_zathura(pdf_files)
-        else:
-            print("Warning: Zathura will not be controlled.")
+        self.dbus = None
+        self.zathura_ps = None
+        self.current_pdf = None
+        self.current_page = 1
 
     def clear_zathura_sessions(self):
         """
-        Delete Zathura session and history files.
+        Delete Zathura session and history files to ensure a clean start.
         """
         home = os.path.expanduser("~")
         sessions_path = os.path.join(home, ".local", "share", "zathura", "sessions")
@@ -54,92 +40,76 @@ class pdfManager:
                 except Exception as e:
                     print(f"Error removing session {f}: {e}")
 
-        try:
-            os.remove(history_path)
-        except Exception as e:
-            print(f"Error removing history: {e}")
+        if os.path.exists(history_path):
+            try:
+                os.remove(history_path)
+            except Exception as e:
+                print(f"Error removing history: {e}")
 
-    def start_zathura(self, pdf_files):
+    def start_zathura(self, initial_pdf_rel=None):
         """
-        Launch Zathura in presentation mode with the first PDF.
+        Launch Zathura in presentation mode.
         """
         if not HAS_PYDBUS:
             return
         
         self.clear_zathura_sessions()
-        self.pdf_files = pdf_files
+        cmd = ['zathura', '--mode=presentation', '--page=1']
+        
+        if initial_pdf_rel:
+            full_path = os.path.join(self.pdf_folder, initial_pdf_rel)
+            cmd.append(full_path)
+        
+        self.zathura_ps = subprocess.Popen(cmd)
+        time.sleep(4) # Tiempo para que el servicio D-Bus se registre
 
-        self.zathura_ps = subprocess.Popen([
-            'zathura',
-            f"{self.pdf_folder}/{self.pdf_files[self.current_pdf]}",
-            '--mode=presentation',
-            '--page=1'
-        ])
-        time.sleep(4)
-
-        dbus = SessionBus()
-        service_name = None
-        for name in dbus.get("org.freedesktop.DBus").ListNames():
-            if name.startswith("org.pwmt.zathura.PID"):
-                service_name = name
-                break
-
-        self.dbus = dbus.get(service_name, "/org/pwmt/zathura")
-        self.current_page = 1
-        self.dbus.GotoPage(self.current_page)  # Ensure page=0
-
-    def __del__(self):
-        """Cleanup placeholder."""
-        pass
+        # Buscamos el servicio D-Bus por PID como en tu versión original
+        try:
+            bus = SessionBus()
+            service_name = None
+            for name in bus.get("org.freedesktop.DBus").ListNames():
+                if name.startswith("org.pwmt.zathura.PID"):
+                    service_name = name
+                    break
+            
+            if service_name:
+                self.dbus = bus.get(service_name, "/org/pwmt/zathura")
+                self.current_page = 1
+                self.dbus.GotoPage(self.current_page)
+        except Exception as e:
+            print(f"D-Bus connection error: {e}")
 
     def is_dbus_active(self):
-        """
-        Check if Zathura D-Bus is reachable.
-        """
+        if not self.dbus: return False
         try:
             self.dbus.Ping()
             return True
-        except Exception:
+        except:
             return False
 
-    def open_pdf(self, new_pdf_idx):
+    def open_pdf(self, relative_path):
         """
-        Open a new PDF by index.
+        Open a new PDF via D-Bus if running, or restart Zathura.
         """
-        file_path = os.path.join(self.pdf_folder, self.pdf_files[new_pdf_idx])
-        self.current_pdf = new_pdf_idx
+        file_path = os.path.abspath(os.path.join(self.pdf_folder, relative_path))
+        self.current_pdf = relative_path
 
         if not self.is_dbus_active():
-            self.start_zathura()
-
-        try:
-            self.current_page = 0
-            self.dbus.OpenDocument(file_path, "", self.current_page)
-        except Exception as e:
-            print(f"Error opening PDF: {e}")
-            raise
-
-        time.sleep(0.1)
-
-    def close(self):
-        """
-        Stop the Zathura process.
-        """
-        try:
-            if self.zathura_ps:
-                self.zathura_ps.terminate()
-                self.zathura_ps.wait()
-        except Exception as e:
-            print(f"Error closing Zathura: {e}")
+            self.start_zathura(relative_path)
+        else:
+            try:
+                self.current_page = 0
+                self.dbus.OpenDocument(file_path, "", self.current_page)
+            except Exception as e:
+                print(f"Error opening PDF: {e}")
+                # Si falla, intentamos reiniciar
+                self.start_zathura(relative_path)
 
     def turn_page(self):
-        """
-        Go to the next page.
-        """
-        
-        if self.dbus:
-            try:
-                self.current_page = self.dbus.pagenumber + 1
-                self.dbus.GotoPage(self.current_page)
-            except Exception as e:
-                print(f"Error turning page: {e}")
+        if self.is_dbus_active():
+            self.current_page += 1
+            self.dbus.GotoPage(self.current_page)
+
+    def close(self):
+        if self.zathura_ps:
+            self.zathura_ps.terminate()
